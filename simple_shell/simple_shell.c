@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -15,24 +17,53 @@ typedef struct Command {
         CommandTag_Builtin,
     } tag;
 
-    char* args[MAX_BUFFER_LENGTH];
+    int argc;
+    char* argv[MAX_BUFFER_LENGTH];
 } Command;
 
 Command ParseCommand(char* input) {
-    return (Command) { .tag = CommandTag_User, .args = {"ls", NULL} };
-        //{ .tag = CommandTag_Absolute, .arglist = ["/bin/ls", "-la", NULL]};
-        //{ .tag = CommandTag_Builtin, .arglist = ["proc", "1/status", "NULL"]};
-        //{ .tag = CommandTag_Builtin, .arglist = ["exit", "0"]};
-}
-
-char* GetCommandName(Command cmd) {
-    return cmd.args[0];
+    // Just testing things for now
+    
+    return
+        /*
+        (Command) {
+            .tag = CommandTag_User,
+            .argc = 1,
+            .argv = {"ls", NULL},
+        };
+        */
+        /*
+        (Command) {
+            .tag = CommandTag_Absolute,
+            .argc = 2
+            .argv = {"/bin/ls", "-la", NULL},
+        };
+        */
+        (Command) {
+            .tag = CommandTag_Builtin,
+            .argc = 2,
+            .argv = {"proc", "1/status", "NULL"},
+        };
+        /*
+        (Command) {
+            .tag = CommandTag_Builtin,
+            .argc = 1,
+            .argv = {"exit"}
+        };
+        */
+        /*
+        (Command) {
+            .tag = CommandTag_Builtin,
+            .argc = 2,
+            .argv = {"exit", "9"}
+        };
+        */
 }
 
 int main(int argc, char* argv[]) {
 
     if (argc > 1) {
-        fprintf(stderr, "Don't call me with any arguments.\n");
+        perror("Don't call me with any arguments.");
         return 1;
     }
 
@@ -51,23 +82,55 @@ int main(int argc, char* argv[]) {
         Command cmd = ParseCommand(buffer);
         switch (cmd.tag) {
             case CommandTag_Absolute:
-                printf("Find command using the absolute path.\n");
-                break;
             case CommandTag_User:
-                printf("Find command using the current PATH variable.\n");
-                break;
             case CommandTag_Relative:
-                printf("Find command using a relative path.\n");
+                printf("It is a command!\n");
+
+                int pid = fork();
+                if (pid > 0) {
+                    wait(NULL);
+                } else if (pid == 0) {
+                    execvp(cmd.argv[0], cmd.argv);
+                    perror("Failed at exec!");
+                    exit(1);
+                } else {
+                    perror("Failed at fork!");
+                }
                 break;
+
             case CommandTag_Builtin:
-                printf("Command is either 'exit' or 'proc'.\n");
+                printf("It is a builtin!\n");
+                if (strcmp(cmd.argv[0], "proc") == 0) {
+                    printf("It is a proc call!\n");
+                    snprintf(buffer, (size_t) MAX_BUFFER_LENGTH, "/%s/%s", cmd.argv[0], cmd.argv[1]);
+                    printf("Reading from %s\n", buffer);
+                    FILE* proc = fopen("/proc/1/status", "r");
+                    int c;
+                    while ((c = fgetc(proc)) != EOF) {
+                        printf("%c", c);
+                    }
+                    fclose(proc);
+                } else if (strcmp(cmd.argv[0], "exit") == 0) {
+                    printf("It is an exit call!\n");
+                    if (cmd.argc == 1) {
+                        exit(0);
+                    } else if (isdigit(cmd.argv[1][0])) {
+                       // Remember to free any allocated memory!
+                       exit(atoi(cmd.argv[1])); 
+                    }
+                } else {
+                    perror("Failed at builtin!");
+                    return 1;
+                }
                 break;
+
             default:
-                fprintf(stderr, "This shouldn't happen.\n");
+                fprintf(stderr, "This shouldn't happen!\n");
                 return 1;
         }
 
-        printf("You called: %s\n", GetCommandName(cmd));
+        
+        printf("You called: %s\n", cmd.argv[0]);
         break;
     }
 
