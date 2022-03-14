@@ -39,14 +39,14 @@ void enqueue(struct node **head, Task *newTask) {
     curr->next = newNode;
 }
 
-// add a new task to the list based on its priority
-void prioritize(struct node **head, Task *newTask) {
+// add a new task to the list based on a custom comparison
+void placeif(struct node **head, Task *newTask, compare cmp) {
     struct node* newNode = malloc(sizeof(struct node));
 
     newNode->task = newTask;
     newNode->next = NULL;
 
-    if (!(*head) || (*head)->task->priority < newTask->priority) {
+    if (!(*head) || cmp(newTask, (*head)->task)) {
         newNode->next = *head;
         *head = newNode;
         return;
@@ -54,13 +54,13 @@ void prioritize(struct node **head, Task *newTask) {
 
     struct node *curr = *head;
     struct node *prev = NULL;
-    while (curr->next && newTask->priority < curr->task->priority) {
+    while (curr && !cmp(newTask, curr->task)) {
         prev = curr;
         curr = curr->next;
     }
 
     prev->next = newNode;
-    newNode->next = curr->next;
+    newNode->next = curr;
 }
 
 // delete the selected task from the list
