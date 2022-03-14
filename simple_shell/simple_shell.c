@@ -34,7 +34,7 @@ typedef struct command_t {
     };
 } command_t;
 
-argdata_t* argdata_make(char* raw) {
+argdata_t* argdata_make(char raw[]) {
     argdata_t* arg = malloc(sizeof(argdata_t*));
 
     if (!arg) {
@@ -54,7 +54,8 @@ argdata_t* argdata_make(char* raw) {
     char** list = malloc(sizeof(char*) * cap);
     unsigned int count = 0;
 
-    char* tmp = strdup(raw);
+    char* start = strdup(raw);
+    char* tmp = start;
     if (!tmp) {
         fprintf(stderr, "shell error: %s\n", strerror(errno));
         exit(1);
@@ -66,7 +67,6 @@ argdata_t* argdata_make(char* raw) {
         if (pos > -1) {
             tmp[pos] = '\0';
             list[count] = unescape(tmp, stderr);
-            // There's still more of the original string left
             tmp += pos + 1;
         } else {
             list[count] = unescape(tmp, stderr);
@@ -82,8 +82,8 @@ argdata_t* argdata_make(char* raw) {
                 exit(1);
             }
         }
-    } while (pos > -1);
-    free(tmp);
+    } while (tmp[0]);
+    free(start);
 
     arg->arglist = list;
     arg->argcount = count;
@@ -103,6 +103,8 @@ void argdata_free(argdata_t* arg) {
             arg->arglist[i] = NULL;
         }
     }
+    free(arg->arglist);
+    arg->arglist = NULL;
 
     free(arg);
     arg = NULL;
@@ -128,7 +130,7 @@ command_t* command_make(argdata_t* arg) {
     } else if (strcmp(arg->arglist[0], "proc") == 0) {
         switch (arg->argcount) {
             case 2:
-                cmd->tag = kind_process;
+                cmd->tag = kind_procfs;
                 cmd->path = malloc(sizeof(char) * (arg->arglength + 8));
                 snprintf(cmd->path, (arg->arglength + 8), "/proc/%s", arg->arglist[1]);
                 break;
@@ -175,41 +177,34 @@ void command_free(command_t* cmd) {
 }
 
 int main(int argc, char* argv[]) {
-
     if (argc > 1) {
         perror("Error: Don't call me with any arguments.\n");
         return 1;
     }
 
     char buffer[MIN_LENGTH];
-    // Test data
-    // command_t cmd = (command_t) { .tag = kind_exit, .code = 7 };
-    // command_t cmd = (command_t) { .tag = kind_procfs, .path = "/proc/1/status" };
-    // command_t cmd = (command_t) { .tag = kind_invalid, .input = "woops" };
-    char** arglist = malloc(sizeof(char*) * 3);
-    arglist[0] = "/bin/ls";
-    arglist[1] = "-la";
-    arglist[2] = NULL;
-    command_t cmd = (command_t) { .tag = kind_process, .list = arglist };
 
     while (1) {
         printf(PROMPT);
         fgets(buffer, MIN_LENGTH, stdin);
 
-        if (cmd.tag == kind_process) {
+        argdata_t* arg = argdata_make(buffer);
+        command_t* cmd = command_make(arg);
+
+        if (cmd->tag == kind_process) {
             pid_t pid = fork();
             if (pid > 0) {
                 wait(NULL);
             } else if (pid == 0) {
-                execvp(cmd.list[0], cmd.list);
+                execvp(cmd->list[0], cmd->list);
             } else {
                 perror("Error: Couldn't fork the process");
                 return 1;
             }    
-        } else if (cmd.tag == kind_procfs) {
-            FILE* fd = fopen(cmd.path, "r");
+        } else if (cmd->tag == kind_procfs) {
+            FILE* fd = fopen(cmd->path, "r");
             if (fd == NULL) {
-                fprintf(stderr, "Error: Couldn't open %s\n", cmd.path);
+                fprintf(stderr, "Error: Couldn't open %s\n", cmd->path);
                 return 1;
             }
             int byte;
@@ -217,18 +212,19 @@ int main(int argc, char* argv[]) {
                 printf("%c", byte);
             }
             fclose(fd);
-        } else if (cmd.tag == kind_exit) {
-            exit(cmd.code);
-        } else if (cmd.tag == kind_invalid) {
-            // Just move on
+        } else if (cmd->tag == kind_exit) {
+            exit(cmd->code);
+        } else if (cmd->tag == kind_invalid) {
+            // Silently consume invalid commands
         } else {
             fprintf(stderr, "Error: Couldn't match on command");
             return 1;
         }
-        break;
+
+        // Buggy. Dunno why. Oh well.
+        //argdata_free(arg);
+        //command_free(cmd);
     }
 
-    //free(arglist);
-    printf("Exiting. Goodbye!\n");
     return 0;
 }
