@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -9,7 +10,7 @@
 #include "utils.h"
 
 #define PROMPT "$ "
-#define BUFFER_LENGTH 4096
+#define MIN_LENGTH 1024
 
 typedef struct argdata_t {
     char* argstring;
@@ -30,40 +31,117 @@ typedef struct command_t {
         char** list;
         char* path;
         int code;
-        char* input;
     };
 } command_t;
 
-argdata_t* argdata_make(char* raw, unsigned int len) {
+argdata_t* argdata_make(char* raw) {
     argdata_t* arg = malloc(sizeof(argdata_t*));
 
-    if (arg == NULL) {
-        perror("Error: Couldn't allocate argdata");
+    if (!arg) {
+        fprintf(stderr, "Error: Couldn't allocate argdata\n");
         exit(1);
     }
 
-    arg->argstring = strdup(raw);
-    arg->arglength = len;
-    arg->arglist = NULL; // Figure this out
-    arg->argcount = 0;
+    char* dupe = strdup(raw);
+    if (!dupe) {
+        fprintf(stderr, "Error: Couldn't duplicate string\n");
+        exit(1);
+    }
+    arg->argstring = dupe;
+    arg->arglength = strlen(dupe);
+
+    unsigned int cap = MIN_LENGTH;
+    char** list = malloc(sizeof(char*) * cap);
+    unsigned int count = 0;
+
+    char* tmp = strdup(raw);
+    if (!tmp) {
+        fprintf(stderr, "shell error: %s\n", strerror(errno));
+        exit(1);
+    }
+
+    int pos;
+    do {
+        pos = first_unquoted_space(tmp);
+        if (pos > -1) {
+            tmp[pos] = '\0';
+            list[count] = unescape(tmp, stderr);
+            // There's still more of the original string left
+            tmp += pos + 1;
+        } else {
+            list[count] = unescape(tmp, stderr);
+        }
+        count += 1;
+
+        // Realloc check happens at the end to ensure our list is never full
+        if (count == cap) {
+            cap *= 2;
+            list = (char**) realloc(list, sizeof(char*) * cap);
+            if (!list) {
+                fprintf(stderr, "shell error: %s\n", strerror(errno));
+                exit(1);
+            }
+        }
+    } while (pos > -1);
+    free(tmp);
+
+    arg->arglist = list;
+    arg->argcount = count;
 
     return arg;
 }
 
 void argdata_free(argdata_t* arg) {
-    free(arg->argstring);
-    for (unsigned int i = 0; i < arg->argcount; i += 1) {
-        free(arg->arglist[i]);
+    if (arg->argstring) {
+        free(arg->argstring);
+        arg->argstring = NULL;
     }
+
+    for (unsigned int i = 0; i < arg->argcount; i += 1) {
+        if (arg->arglist[i]) {
+            free(arg->arglist[i]);
+            arg->arglist[i] = NULL;
+        }
+    }
+
     free(arg);
+    arg = NULL;
 }
 
 command_t* command_make(argdata_t* arg) {
     command_t* cmd = malloc(sizeof(command_t*));
 
-    // It's just exit for now
-    cmd->tag = kind_exit;
-    cmd->code = 0;
+    if (strcmp(arg->arglist[0], "exit") == 0) {
+        switch (arg->argcount) {
+            case 1:
+                cmd->tag = kind_exit;
+                cmd->code = 0;
+                break;
+            case 2:
+                cmd->tag = kind_exit;
+                cmd->code = atoi(arg->arglist[1]);
+                break;
+            default:
+                cmd->tag = kind_invalid;
+                break;
+        }
+    } else if (strcmp(arg->arglist[0], "proc") == 0) {
+        switch (arg->argcount) {
+            case 2:
+                cmd->tag = kind_process;
+                cmd->path = malloc(sizeof(char) * (arg->arglength + 8));
+                snprintf(cmd->path, (arg->arglength + 8), "/proc/%s", arg->arglist[1]);
+                break;
+            default:
+                cmd->tag = kind_invalid;
+                break;
+        }
+    } else {
+        cmd->tag = kind_process;
+        cmd->list = arg->arglist;
+        cmd->list[arg->argcount] = NULL;
+        arg->arglist = NULL;
+    }
 
     return cmd;
 }
@@ -71,11 +149,21 @@ command_t* command_make(argdata_t* arg) {
 void command_free(command_t* cmd) {
     switch (cmd->tag) {
         case kind_process:
+            if (cmd->list) {
+                for (unsigned int i = 0; cmd->list[i] != NULL; i += 1) {
+                    free(cmd->list[i]);
+                }
+                free(cmd->list);
+                cmd->list = NULL;
+            }
             break;
         case kind_procfs:
+            if (cmd->path) {
+                free(cmd->path);
+                cmd->path = NULL;
+            }
             break;
         case kind_exit:
-            break;
         case kind_invalid:
             break;
         default:
@@ -93,7 +181,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    char buffer[BUFFER_LENGTH];
+    char buffer[MIN_LENGTH];
     // Test data
     // command_t cmd = (command_t) { .tag = kind_exit, .code = 7 };
     // command_t cmd = (command_t) { .tag = kind_procfs, .path = "/proc/1/status" };
@@ -106,7 +194,7 @@ int main(int argc, char* argv[]) {
 
     while (1) {
         printf(PROMPT);
-        fgets(buffer, BUFFER_LENGTH, stdin);
+        fgets(buffer, MIN_LENGTH, stdin);
 
         if (cmd.tag == kind_process) {
             pid_t pid = fork();
@@ -133,7 +221,6 @@ int main(int argc, char* argv[]) {
             exit(cmd.code);
         } else if (cmd.tag == kind_invalid) {
             // Just move on
-            printf("Debugging: %s\n", cmd.input);
         } else {
             fprintf(stderr, "Error: Couldn't match on command");
             return 1;
