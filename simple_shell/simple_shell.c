@@ -12,19 +12,23 @@
 #define PROMPT "$ "
 #define MIN_LENGTH 1024
 
-typedef struct argdata_t {
+// ArgData is mostly metadata about the current input being process.
+// Enough structure to answer some questions and get working
+typedef struct ArgData {
     char* argstring;
     unsigned int arglength;
     char** arglist;
     unsigned int argcount;
-} argdata_t;
+} ArgData;
 
-typedef struct command_t {
+// Command is derived from ArgData. It's more structured and has
+// everything necessary in order to execute a process or builtin. 
+typedef struct Command {
     enum {
-        kind_process,
-        kind_procfs,
-        kind_exit,
-        kind_invalid,
+        CommandTag_Process,
+        CommandTag_ProcFS,
+        CommandTag_Exit,
+        CommandTag_Invalid,
     } tag;
 
     union {
@@ -32,23 +36,23 @@ typedef struct command_t {
         char* path;
         int code;
     };
-} command_t;
+} Command;
 
-argdata_t* argdata_make(char raw[]) {
-    argdata_t* arg = malloc(sizeof(argdata_t*));
+ArgData* create_ArgData(char raw[]) {
+    ArgData* arg = malloc(sizeof(ArgData*));
 
     if (!arg) {
-        fprintf(stderr, "Error: Couldn't allocate argdata\n");
+        perror("Error: Couldn't allocate ArgData");
         exit(1);
     }
 
-    char* dupe = strdup(raw);
-    if (!dupe) {
-        fprintf(stderr, "Error: Couldn't duplicate string\n");
+    char* copy = strdup(raw);
+    if (!copy) {
+        perror("Error: Couldn't duplicate string");
         exit(1);
     }
-    arg->argstring = dupe;
-    arg->arglength = strlen(dupe);
+    arg->argstring = copy;
+    arg->arglength = strlen(copy);
 
     unsigned int cap = MIN_LENGTH;
     char** list = malloc(sizeof(char*) * cap);
@@ -57,7 +61,7 @@ argdata_t* argdata_make(char raw[]) {
     char* start = strdup(raw);
     char* tmp = start;
     if (!tmp) {
-        fprintf(stderr, "shell error: %s\n", strerror(errno));
+        perror("Error: Couldn't duplicate string");
         exit(1);
     }
 
@@ -65,8 +69,11 @@ argdata_t* argdata_make(char raw[]) {
     do {
         pos = first_unquoted_space(tmp);
         if (pos > -1) {
+            // Mark the "end" of the current string to unescape
             tmp[pos] = '\0';
             list[count] = unescape(tmp, stderr);
+
+            // Since there's input remaining, this should be safe 
             tmp += pos + 1;
         } else {
             list[count] = unescape(tmp, stderr);
@@ -74,33 +81,41 @@ argdata_t* argdata_make(char raw[]) {
         count += 1;
 
         // Realloc check happens at the end to ensure our list is never full
+        // I.E. a cheesy way to have arglist[count] not be out-of-bounds
         if (count == cap) {
             cap *= 2;
             list = (char**) realloc(list, sizeof(char*) * cap);
             if (!list) {
-                fprintf(stderr, "shell error: %s\n", strerror(errno));
+                perror("Error: Couldn't allocate ArgData.arglist");
                 exit(1);
             }
         }
-    } while (tmp[0]);
+    } while (pos > -1);
     free(start);
 
+    list[count] = NULL;
     arg->arglist = list;
     arg->argcount = count;
 
     return arg;
 }
 
-void argdata_free(argdata_t* arg) {
+void destroy_ArgData(ArgData* arg) {
+    if (!arg) {
+        return;
+    }
+
     if (arg->argstring) {
         free(arg->argstring);
         arg->argstring = NULL;
     }
 
-    for (unsigned int i = 0; i < arg->argcount; i += 1) {
-        if (arg->arglist[i]) {
-            free(arg->arglist[i]);
-            arg->arglist[i] = NULL;
+    if (arg->arglist) {
+        for (unsigned int i = 0; i < arg->argcount; i += 1) {
+            if (arg->arglist[i]) {
+                free(arg->arglist[i]);
+                arg->arglist[i] = NULL;
+            }
         }
     }
     free(arg->arglist);
@@ -110,47 +125,59 @@ void argdata_free(argdata_t* arg) {
     arg = NULL;
 }
 
-command_t* command_make(argdata_t* arg) {
-    command_t* cmd = malloc(sizeof(command_t*));
+Command* create_Command(ArgData* arg) {
+    Command* cmd = malloc(sizeof(Command*));
 
     if (strcmp(arg->arglist[0], "exit") == 0) {
         switch (arg->argcount) {
             case 1:
-                cmd->tag = kind_exit;
+                cmd->tag = CommandTag_Exit;
                 cmd->code = 0;
                 break;
             case 2:
-                cmd->tag = kind_exit;
-                cmd->code = atoi(arg->arglist[1]);
+                // atoi() returns a zero (!) on a failed parse
+                // This probably isn't a rigorous enough check but oh well
+                if (isdigit(arg->arglist[1][0])) {
+                    cmd->tag = CommandTag_Exit;
+                    cmd->code = atoi(arg->arglist[1]);
+                } else {
+                    cmd->tag = CommandTag_Invalid;
+                }
                 break;
             default:
-                cmd->tag = kind_invalid;
+                cmd->tag = CommandTag_Invalid;
                 break;
         }
     } else if (strcmp(arg->arglist[0], "proc") == 0) {
         switch (arg->argcount) {
             case 2:
-                cmd->tag = kind_procfs;
+                cmd->tag = CommandTag_ProcFS;
                 cmd->path = malloc(sizeof(char) * (arg->arglength + 8));
                 snprintf(cmd->path, (arg->arglength + 8), "/proc/%s", arg->arglist[1]);
                 break;
             default:
-                cmd->tag = kind_invalid;
+                cmd->tag = CommandTag_Invalid;
                 break;
         }
     } else {
-        cmd->tag = kind_process;
+        // Just throw any other input at an exec call and hope for the best
+        cmd->tag = CommandTag_Process;
         cmd->list = arg->arglist;
-        cmd->list[arg->argcount] = NULL;
+
+        // Trying not to share pointers in too many different places
         arg->arglist = NULL;
     }
 
     return cmd;
 }
 
-void command_free(command_t* cmd) {
+void destroy_Command(Command* cmd) {
+    if (!cmd) {
+        return;
+    }
+
     switch (cmd->tag) {
-        case kind_process:
+        case CommandTag_Process:
             if (cmd->list) {
                 for (unsigned int i = 0; cmd->list[i] != NULL; i += 1) {
                     free(cmd->list[i]);
@@ -159,17 +186,17 @@ void command_free(command_t* cmd) {
                 cmd->list = NULL;
             }
             break;
-        case kind_procfs:
+        case CommandTag_ProcFS:
             if (cmd->path) {
                 free(cmd->path);
                 cmd->path = NULL;
             }
             break;
-        case kind_exit:
-        case kind_invalid:
+        case CommandTag_Exit:
+        case CommandTag_Invalid:
             break;
         default:
-            perror("Error: Unreachable at command_free");
+            perror("Error: Unreachable at destroy_Command");
             break;
     }
 
@@ -178,7 +205,7 @@ void command_free(command_t* cmd) {
 
 int main(int argc, char* argv[]) {
     if (argc > 1) {
-        perror("Error: Don't call me with any arguments.\n");
+        perror("Error: Don't call me with any arguments.");
         return 1;
     }
 
@@ -187,11 +214,12 @@ int main(int argc, char* argv[]) {
     while (1) {
         printf(PROMPT);
         fgets(buffer, MIN_LENGTH, stdin);
+        buffer[strcspn(buffer, "\n")] = 0;
 
-        argdata_t* arg = argdata_make(buffer);
-        command_t* cmd = command_make(arg);
+        ArgData* arg = create_ArgData(buffer);
+        Command* cmd = create_Command(arg);
 
-        if (cmd->tag == kind_process) {
+        if (cmd->tag == CommandTag_Process) {
             pid_t pid = fork();
             if (pid > 0) {
                 wait(NULL);
@@ -201,7 +229,7 @@ int main(int argc, char* argv[]) {
                 perror("Error: Couldn't fork the process");
                 return 1;
             }    
-        } else if (cmd->tag == kind_procfs) {
+        } else if (cmd->tag == CommandTag_ProcFS) {
             FILE* fd = fopen(cmd->path, "r");
             if (fd == NULL) {
                 fprintf(stderr, "Error: Couldn't open %s\n", cmd->path);
@@ -212,18 +240,18 @@ int main(int argc, char* argv[]) {
                 printf("%c", byte);
             }
             fclose(fd);
-        } else if (cmd->tag == kind_exit) {
+        } else if (cmd->tag == CommandTag_Exit) {
             exit(cmd->code);
-        } else if (cmd->tag == kind_invalid) {
+        } else if (cmd->tag == CommandTag_Invalid) {
             // Silently consume invalid commands
         } else {
-            fprintf(stderr, "Error: Couldn't match on command");
+            perror("Error: Couldn't match on Command");
             return 1;
         }
 
         // Buggy. Dunno why. Oh well.
-        //argdata_free(arg);
-        //command_free(cmd);
+        //destroy_ArgData(arg);
+        //destroy_Command(cmd);
     }
 
     return 0;
