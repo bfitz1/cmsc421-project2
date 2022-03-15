@@ -1,0 +1,30 @@
+Project 2
+
+Blair Fitzhugh
+CMSC 421
+
+Parts 1,2
+simple_shell.c begins by reading input from stdin. The program lightly parses
+user input into a struct designed to hold an array of slices (separation is
+based on unescaped whitespace) and other useful data to assist with program logic.
+This is then further parsed into a more detailed struct that assists in
+disptaching certain features corresponding to the given input.
+
+Part 3
+schedule_fcfs.c queues each cpu task as it comes in. I've created a list function
+named enqueue to append items to the list.
+
+schedule_sjf.c queues tasks according to their burst. I've created another list
+function placeif() to insert into the list according to results of a function
+pointer argument.
+
+schedule_priority.c is similar to schedule_sjf.c but checks priority rather than
+burst.
+
+schedule_rr.c cycles through every queued task, subtracting a time quantum from
+the its burst. Completed tasks are removed, and leftover time quanta are spent
+on the following task. 
+
+schedule_priority_rr.c combines the previous two approachs, splitting the list
+into two sublists whenever two or more items with the same priority appear
+in succession.
