@@ -39,7 +39,7 @@ typedef struct Command {
 } Command;
 
 ArgData* create_ArgData(char raw[]) {
-    ArgData* arg = malloc(sizeof(ArgData*));
+    ArgData* arg = malloc(sizeof(ArgData));
 
     if (!arg) {
         perror("Error: Couldn't allocate ArgData");
@@ -59,24 +59,24 @@ ArgData* create_ArgData(char raw[]) {
     unsigned int count = 0;
 
     char* start = strdup(raw);
-    char* tmp = start;
-    if (!tmp) {
+    char* next = start;
+    if (!next) {
         perror("Error: Couldn't duplicate string");
         exit(1);
     }
 
     int pos;
     do {
-        pos = first_unquoted_space(tmp);
+        pos = first_unquoted_space(next);
         if (pos > -1) {
             // Mark the "end" of the current string to unescape
-            tmp[pos] = '\0';
-            list[count] = unescape(tmp, stderr);
+            next[pos] = '\0';
+            list[count] = unescape(next, stderr);
 
             // Since there's input remaining, this should be safe 
-            tmp += pos + 1;
+            next += pos + 1;
         } else {
-            list[count] = unescape(tmp, stderr);
+            list[count] = unescape(next, stderr);
         }
         count += 1;
 
@@ -126,7 +126,7 @@ void destroy_ArgData(ArgData* arg) {
 }
 
 Command* create_Command(ArgData* arg) {
-    Command* cmd = malloc(sizeof(Command*));
+    Command* cmd = malloc(sizeof(Command));
 
     if (strcmp(arg->arglist[0], "exit") == 0) {
         switch (arg->argcount) {
@@ -241,7 +241,13 @@ int main(int argc, char* argv[]) {
             }
             fclose(fd);
         } else if (cmd->tag == CommandTag_Exit) {
-            exit(cmd->code);
+            int code = cmd->code;
+
+            // Clean up before exiting
+            destroy_ArgData(arg);
+            destroy_Command(cmd);
+
+            exit(code);
         } else if (cmd->tag == CommandTag_Invalid) {
             // Silently consume invalid commands
         } else {
@@ -249,9 +255,9 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Buggy. Dunno why. Oh well.
-        //destroy_ArgData(arg);
-        //destroy_Command(cmd);
+        // I'm stumped on these two
+        destroy_ArgData(arg);
+        destroy_Command(cmd);
     }
 
     return 0;
